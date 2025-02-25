@@ -20,42 +20,90 @@ function App() {
         throw new Error('Please enter a valid URL');
       }
 
-      // Fetch webpage content
-      const response = await axios.get(url);
-      const content = response.data;
+      try {
+        new URL(url);
+      } catch {
+        throw new Error('Please enter a valid URL format (e.g., https://example.com)');
+      }
 
-      // Convert HTML to PDF
-      const pdfBlob = await html2pdf()
-        .set({
-          html2canvas: { scale: 2 },
-          jsPDF: { unit: 'pt', format: 'a4', orientation: 'portrait' }
-        })
-        .from(content)
-        .outputPdf('blob');
+      // Create a proxy URL to avoid CORS issues
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+
+      // Fetch webpage content
+      const response = await axios.get(proxyUrl, {
+        timeout: 10000, // 10 second timeout
+        headers: {
+          'Accept': 'text/html'
+        }
+      });
+
+      if (!response.data) {
+        throw new Error('Failed to fetch webpage content');
+      }
+
+      // Create a temporary container for the content
+      const container = document.createElement('div');
+      container.innerHTML = response.data;
+
+      // Convert HTML to PDF with better options
+      const pdfBlob = await html2pdf().set({
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          allowTaint: true,
+          letterRendering: true
+        },
+        jsPDF: {
+          unit: 'pt',
+          format: 'a4',
+          orientation: 'portrait',
+          compress: true
+        },
+        filename: 'webpage.pdf'
+      }).from(container).outputPdf('blob');
 
       // If passkey is provided, encrypt the PDF
       if (passkey) {
         const pdfDoc = await PDFDocument.load(await pdfBlob.arrayBuffer());
-        await pdfDoc.encrypt({ userPassword: passkey, ownerPassword: passkey });
+        await pdfDoc.encrypt({
+          userPassword: passkey,
+          ownerPassword: passkey,
+          permissions: {
+            printing: 'highResolution',
+            modifying: false,
+            copying: false,
+            annotating: false,
+            fillingForms: false,
+            contentAccessibility: true,
+            documentAssembly: false
+          }
+        });
         const encryptedPdfBytes = await pdfDoc.save();
         
         // Create download link for encrypted PDF
-        const blob = new Blob([encryptedPdfBytes], { type: 'application/pdf' });
-        const url = window.URL.createObjectURL(blob);
+        const downloadUrl = window.URL.createObjectURL(new Blob([encryptedPdfBytes], { type: 'application/pdf' }));
         const link = document.createElement('a');
-        link.href = url;
-        link.download = 'encrypted-document.pdf';
+        link.href = downloadUrl;
+        link.download = `${new URL(url).hostname}-encrypted.pdf`;
+        document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(downloadUrl);
       } else {
         // Create download link for non-encrypted PDF
-        const url = window.URL.createObjectURL(pdfBlob);
+        const downloadUrl = window.URL.createObjectURL(pdfBlob);
         const link = document.createElement('a');
-        link.href = url;
-        link.download = 'document.pdf';
+        link.href = downloadUrl;
+        link.download = `${new URL(url).hostname}.pdf`;
+        document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(downloadUrl);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      console.error('PDF conversion error:', err);
+      setError(err instanceof Error ? err.message : 'An error occurred while converting the webpage to PDF');
     } finally {
       setLoading(false);
     }
@@ -83,6 +131,7 @@ function App() {
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://example.com"
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              required
             />
           </div>
 
@@ -110,7 +159,7 @@ function App() {
 
           <button
             onClick={convertToPDF}
-            disabled={loading}
+            disabled={loading || !url}
             className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? (
@@ -123,10 +172,15 @@ function App() {
             )}
           </button>
 
-          <p className="text-xs text-gray-500 text-center mt-4">
-            Enter a publicly accessible URL to convert it into a PDF.
-            {passkey && " The PDF will be encrypted with your passkey."}
-          </p>
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500 text-center">
+              Enter a publicly accessible URL to convert it into a PDF.
+              {passkey && " The PDF will be encrypted with your passkey."}
+            </p>
+            <p className="text-xs text-gray-500 text-center">
+              Note: Some websites may block content from being converted due to their security settings.
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -134,4 +188,3 @@ function App() {
 }
 
 export default App;
-
