@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { FileText, Lock, Link as LinkIcon, Download, Eye } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import html2pdf from 'html2pdf.js';
@@ -54,7 +54,7 @@ function App() {
                        tempContainer.body;
 
       if (mainContent) {
-        // Create a styled preview
+        // Create a styled preview with improved styling
         setPreview(`
           <style>
             ${styleContent}
@@ -65,10 +65,29 @@ function App() {
               box-shadow: 0 2px 4px rgba(0,0,0,0.1);
               max-height: 500px;
               overflow-y: auto;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             }
-            .preview-container img {
+            .preview-container * {
               max-width: 100%;
               height: auto;
+              page-break-inside: avoid;
+            }
+            .preview-container img {
+              display: inline-block;
+              margin: 10px 0;
+            }
+            .preview-container pre {
+              white-space: pre-wrap;
+              word-wrap: break-word;
+              background: #f5f5f5;
+              padding: 15px;
+              border-radius: 4px;
+              margin: 10px 0;
+            }
+            .preview-container code {
+              background: #f5f5f5;
+              padding: 2px 4px;
+              border-radius: 3px;
             }
           </style>
           <div class="preview-container">
@@ -102,8 +121,51 @@ function App() {
         throw new Error('Please enter a valid URL format (e.g., https://example.com)');
       }
 
-      // Use the preview content for PDF generation if available
-      const contentToConvert = preview || await (async () => {
+      // Create a temporary container for PDF generation
+      const pdfContainer = document.createElement('div');
+      pdfContainer.style.width = '800px';
+      pdfContainer.style.margin = '0 auto';
+      pdfContainer.style.padding = '20px';
+      pdfContainer.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+      
+      // Add base styles for PDF content
+      const styleSheet = document.createElement('style');
+      styleSheet.textContent = `
+        * {
+          -webkit-print-color-adjust: exact !important;
+          color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        img {
+          max-width: 100%;
+          height: auto;
+          display: block;
+          margin: 10px 0;
+        }
+        pre {
+          white-space: pre-wrap;
+          word-wrap: break-word;
+          background: #f5f5f5;
+          padding: 15px;
+          border-radius: 4px;
+          margin: 10px 0;
+        }
+        code {
+          background: #f5f5f5;
+          padding: 2px 4px;
+          border-radius: 3px;
+        }
+        p {
+          margin: 10px 0;
+          line-height: 1.5;
+        }
+      `;
+      pdfContainer.appendChild(styleSheet);
+
+      // Use preview content if available, otherwise fetch new content
+      if (preview) {
+        pdfContainer.innerHTML += preview;
+      } else {
         const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
         const response = await axios.get(proxyUrl, {
           timeout: 10000,
@@ -111,18 +173,20 @@ function App() {
             'Accept': 'text/html'
           }
         });
-        return response.data;
-      })();
+        const tempContainer = document.createElement('div');
+        tempContainer.innerHTML = response.data;
+        const mainContent = tempContainer.querySelector('main') || 
+                          tempContainer.querySelector('.main') ||
+                          tempContainer.querySelector('#content') ||
+                          tempContainer.querySelector('.content') ||
+                          tempContainer.body;
+        pdfContainer.innerHTML += mainContent.innerHTML;
+      }
 
-      // Create a temporary container with proper styling
-      const container = document.createElement('div');
-      container.innerHTML = contentToConvert;
-      container.style.width = '800px'; // Fixed width for better rendering
-      container.style.margin = '0 auto';
-      container.style.padding = '20px';
-      document.body.appendChild(container);
+      // Append container to document for rendering
+      document.body.appendChild(pdfContainer);
 
-      // Convert HTML to PDF with enhanced options
+      // Enhanced PDF generation options
       const pdfBlob = await html2pdf().set({
         html2canvas: {
           scale: 2,
@@ -130,20 +194,36 @@ function App() {
           logging: false,
           allowTaint: true,
           letterRendering: true,
-          width: 800, // Match container width
+          width: 800,
+          height: undefined,
+          scrollX: 0,
+          scrollY: 0,
           windowWidth: 800,
+          onclone: (clonedDoc) => {
+            // Ensure all images are loaded before PDF generation
+            const images = clonedDoc.getElementsByTagName('img');
+            return Promise.all(Array.from(images).map(img => {
+              if (img.complete) return Promise.resolve();
+              return new Promise((resolve) => {
+                img.onload = resolve;
+                img.onerror = resolve;
+              });
+            }));
+          }
         },
         jsPDF: {
           unit: 'pt',
           format: 'a4',
           orientation: 'portrait',
           compress: true,
-          hotfixes: ['px_scaling']
+          hotfixes: ['px_scaling'],
+          margin: [40, 40, 40, 40]
         },
         filename: 'webpage.pdf'
-      }).from(container).outputPdf('blob');
+      }).from(pdfContainer).outputPdf('blob');
 
-      document.body.removeChild(container);
+      // Remove temporary container
+      document.body.removeChild(pdfContainer);
 
       if (passkey) {
         const pdfDoc = await PDFDocument.load(await pdfBlob.arrayBuffer());
